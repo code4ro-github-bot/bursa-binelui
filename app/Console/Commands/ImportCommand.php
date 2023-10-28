@@ -8,6 +8,7 @@ use App\Enums\OrganizationStatus;
 use App\Enums\UserRole;
 use App\Models\ActivityDomain;
 use App\Models\Organization;
+use App\Models\ProjectCategory;
 use App\Models\User;
 use App\Services\Sanitize;
 use Carbon\Carbon;
@@ -58,9 +59,9 @@ class ImportCommand extends Command
     {
         $this->truncate();
 
-//        $this->importOrganizations();
+        $this->importOrganizations();
         $this->importActivityDomains();
-//        $this->importUsers();
+        $this->importUsers();
 
         return static::SUCCESS;
     }
@@ -181,33 +182,33 @@ class ImportCommand extends Command
                     'eu_platesc_private_key' => Sanitize::text($row->MerchantKey),
                 ]);
 
-                // Add logo
-                $logo = $this->db
-                    ->table('dbo.Files')
-                    ->join('dbo.FilesData', 'dbo.FilesData.Id', 'dbo.Files.Id')
-                    ->where('dbo.Files.Id', $row->LogoImageId)
-                    ->first();
-
-                if ($logo) {
-                    $organization->addMediaFromString($logo->Data)
-                        ->usingFileName($logo->FileName . $logo->FileExtension)
-                        ->usingName($logo->FileName . $logo->FileExtension)
-                        ->toMediaCollection('logo');
-                }
-
-                // Add statute
-                $statute = $this->db
-                    ->table('dbo.Files')
-                    ->join('dbo.FilesData', 'dbo.FilesData.Id', 'dbo.Files.Id')
-                    ->where('dbo.Files.Id', $row->OrganizationalStatusId)
-                    ->first();
-
-                if ($statute) {
-                    $organization->addMediaFromString($statute->Data)
-                        ->usingFileName($statute->FileName . $statute->FileExtension)
-                        ->usingName($statute->FileName . $statute->FileExtension)
-                        ->toMediaCollection('statute');
-                }
+//                // Add logo
+//                $logo = $this->db
+//                    ->table('dbo.Files')
+//                    ->join('dbo.FilesData', 'dbo.FilesData.Id', 'dbo.Files.Id')
+//                    ->where('dbo.Files.Id', $row->LogoImageId)
+//                    ->first();
+//
+//                if ($logo) {
+//                    $organization->addMediaFromString($logo->Data)
+//                        ->usingFileName($logo->FileName . $logo->FileExtension)
+//                        ->usingName($logo->FileName . $logo->FileExtension)
+//                        ->toMediaCollection('logo');
+//                }
+//
+//                // Add statute
+//                $statute = $this->db
+//                    ->table('dbo.Files')
+//                    ->join('dbo.FilesData', 'dbo.FilesData.Id', 'dbo.Files.Id')
+//                    ->where('dbo.Files.Id', $row->OrganizationalStatusId)
+//                    ->first();
+//
+//                if ($statute) {
+//                    $organization->addMediaFromString($statute->Data)
+//                        ->usingFileName($statute->FileName . $statute->FileExtension)
+//                        ->usingName($statute->FileName . $statute->FileExtension)
+//                        ->toMediaCollection('statute');
+//                }
             });
 
             $progressBar->advance($chunk);
@@ -274,10 +275,12 @@ class ImportCommand extends Command
      * - Name => name
      * - Slug => slug.
      */
-    private function importActivityDomains(int $chunk = 100): void
+    private function importActivityDomains(int $chunk = 1): void
     {
         $query = $this->db
             ->table('lkp.ActivityDomains')
+            ->select(['Id', 'Name'])
+            ->selectRaw("(Select STRING_AGG(ONGId,',') From dbo.ONGActivityDomains where ActivityDomainId=ActivityDomains.Id) as NGOsIds")
             ->orderBy('Id');
 
         $total = $query->count();
@@ -285,7 +288,41 @@ class ImportCommand extends Command
         $progressBar = $this->createProgressBar('Importing activity domains...', $total);
         $query->chunk($chunk, function (Collection $items) use ($total, $chunk, $progressBar) {
             $progressBar->advance($chunk);
-            ActivityDomain::upsert(
+            $items->map(function (object $row) {
+                $activityDomain = ActivityDomain::create([
+                    'id' => $row->Id,
+                    'name' => $row->Name,
+                    'slug' => Str::slug($row->Name),
+                ]);
+
+                if ($row->NGOsIds) {
+                    //begin sarma
+                    // pentru ca sunt inregistrari care nu mai sunt in tabela ONGs
+                    // nu aveau cascade delete
+                    $ngoIds = collect(explode(',', $row->NGOsIds));
+                    $ngosFound = Organization::get(['id'])->pluck('id')->intersect($ngoIds);
+                    //end sarma
+
+                    $activityDomain->organizations()->sync($ngosFound);
+                }
+            });
+            $progressBar->finish();
+        });
+    }
+
+    private function importProjectCategories(int $chunk = 100): void
+    {
+
+        $query = $this->db
+            ->table('lkp.ProjectCategories')
+            ->orderBy('Id');
+
+        $total = $query->count();
+
+        $progressBar = $this->createProgressBar('Importing activity ProjectCategories...', $total);
+        $query->chunk($chunk, function (Collection $items) use ($total, $chunk, $progressBar) {
+            $progressBar->advance($chunk);
+            ProjectCategory::upsert(
                 $items->map(fn (object $row) => [
                     'id' => $row->Id,
                     'name' => $row->Name,
@@ -295,5 +332,6 @@ class ImportCommand extends Command
             );
             $progressBar->finish();
         });
+
     }
 }

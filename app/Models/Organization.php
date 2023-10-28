@@ -40,6 +40,7 @@ class Organization extends Model implements HasMedia
      * @var array
      */
     protected $fillable = [
+        'id',
         'name',
         'cif',
         'description',
